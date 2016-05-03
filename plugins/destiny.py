@@ -1,12 +1,15 @@
 import datetime
-import json
+import tweepy
 from cloudbot import hook
+from cloudbot.util.web import try_shorten
+from cloudbot.util import timeformat
+from datetime import datetime
+from feedparser import parse
 from html.parser import HTMLParser
+from pickle import dump, load
+from plugins.twitter import load_api, twitter
 from random import sample
 from requests import get
-from pickle import dump, load
-from feedparser import parse
-from cloudbot.util.web import try_shorten
 
 BASE_URL = 'https://www.bungie.net/platform/Destiny/'
 CACHE = {}
@@ -190,9 +193,34 @@ def get_stat(data, stat):
     else:
         return 'Invalid option {}'.format(stat)
 
+@hook.periodic(300, initial_interval=300)
+def check_updates(message, bot):
+    """Check to see if there have been any updates from Bungie."""
+    global CACHE
+    twt1, twt2 = tweets(bot)
+    fd = news(bot, chan=None)
+    output = []
+    if not CACHE.get('updates', None):
+        CACHE['updates'] = [twt1, twt2, fd]
+        output = [twt1, twt2, fd]
+    else:
+        if CACHE['updates'][0] != twt1:
+            CACHE['updates'][0] = twt1
+            output.append(twt1)
+        if CACHE['updates'][1] != twt2:
+            CACHE['updates'][1] = twt2
+            output.append(twt2)
+        if CACHE['updates'][2] != fd:
+            CACHE['updates'][2] = fd
+            output.append(fd)
+    for conn in bot.connections:
+        for chan in CACHE['channels']:
+            for update in output:
+                bot.connections[conn].message(chan, update)
+
 @hook.on_start()
-def load_cache(bot):
-    '''Load in our pickle cache and the Headers'''
+def load_cache(bot, conn):
+    """Load in our pickle cache and the Headers."""
     global HEADERS
     HEADERS = {'X-API-Key': bot.config.get('api_keys', {}).get('destiny', None)}
     try:
@@ -796,7 +824,21 @@ def clan(bot):
     return 'Check out our Clan: https://www.bungie.net/en/Clan/Detail/939927'
 
 @hook.command('news')
-def news(bot):
+def news(bot, chan, text=None):
+    global CACHE
+    if text:
+        if 'unsubscribe' in text.lower():
+            if CACHE.get('channels', None):
+                if chan not in CACHE['channels']:
+                    CACHE['channels'].remove(chan)
+                return 'Successfully unsubscribed!'
+        elif 'subscribe' in text.lower():
+            if not CACHE.get('channels', None):
+                CACHE['channels'] = [chan]
+            if chan not in CACHE['channels']:
+                CACHE['channels'].append(chan)
+            return 'Successfully subscribed!'
+
     feed = parse('https://www.bungie.net/en/Rss/NewsByCategory?category=destiny&currentpage=1&itemsPerPage=1')
     if not feed.entries:
         return 'Feed not found.'
@@ -804,3 +846,10 @@ def news(bot):
     return '{} - {}'.format(
         feed['entries'][0]['summary'],
         try_shorten(feed['entries'][0]['link']))
+
+@hook.command('tweets')
+def tweets(bot):
+    load_api(bot)
+    bungie = twitter("bungie 1")
+    bungiehelp = twitter("bungiehelp 1")
+    return (bungie, bungiehelp)
